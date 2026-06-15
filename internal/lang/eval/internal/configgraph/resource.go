@@ -81,7 +81,15 @@ func (r *Resource) IsExpansionPlaceholder() bool {
 func (r *Resource) Instances(ctx context.Context) map[addrs.InstanceKey]*ResourceInstance {
 	// We ignore the diagnostics here because they will be returned by
 	// the Value method instead.
-	result, _ := r.decideInstances(ctx)
+	result, diags := r.decideInstances(ctx)
+	if diags.HasErrors() && result == nil {
+		// If decideInstances fails for grapheval-related reasons, such as a
+		// dependency cycle, then it won't produce any result at all. The
+		// errors from that would be collected by a concurrent
+		// [Resource.CheckAll] and so we just report no instances here to
+		// allow things to unwind and report that error.
+		return nil
+	}
 	return result.Instances
 }
 
@@ -93,6 +101,13 @@ func (r *Resource) StaticCheckTraversal(traversal hcl.Traversal) tfdiags.Diagnos
 // Value implements exprs.Valuer.
 func (r *Resource) Value(ctx context.Context) (cty.Value, tfdiags.Diagnostics) {
 	selection, diags := r.decideInstances(ctx)
+	if diags.HasErrors() && selection == nil {
+		// If decideInstances fails for grapheval-related reasons, such as a
+		// dependency cycle, then it won't produce any result at all, but we
+		// still want to let the diagnostics propagate upwards so that the
+		// error gets reported.
+		return exprs.AsEvalError(cty.DynamicVal), diags
+	}
 	return valueForInstances(ctx, selection), diags
 }
 
